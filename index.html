@@ -14,33 +14,120 @@
                    overscroll-behavior: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
       #unity-canvas { position: fixed; left: 0; top: 0; width: 100vw; height: 100vh; display: block;
                       background: #07061a; touch-action: none; outline: none; }
-      #loader { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
-                gap: 18px; color: #fff; font: 600 18px -apple-system, "PingFang TC", sans-serif; background: #07061a; z-index: 2; }
-      #loader h1 { margin: 0; font-size: 34px; letter-spacing: 3px; color: #fff;
-                   text-shadow: 0 0 8px #ff3ec8, 0 0 20px #ff3ec8; }
-      #bar { width: 64vw; height: 10px; border-radius: 5px; background: #1c1840; box-shadow: 0 0 10px #3ee8ff55 inset; overflow: hidden; }
-      #fill { width: 0%; height: 100%; background: linear-gradient(90deg, #3ee8ff, #ff3ec8); box-shadow: 0 0 12px #3ee8ff; transition: width .2s; }
-      #msg { max-width: 86vw; text-align: center; font-size: 14px; color: #c8c4ff; line-height: 1.5; }
+      #loader { position: fixed; inset: 0; z-index: 2; background: #07061a; transition: opacity .45s; }
+      #loader.done { opacity: 0; pointer-events: none; }
+      #fx { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+      #panel { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(84vw, 520px);
+               display: flex; flex-direction: column; align-items: center; gap: 16px; text-align: center;
+               color: #fff; font: 600 16px -apple-system, "PingFang TC", "Microsoft JhengHei", sans-serif; }
+      .logo { line-height: .95; letter-spacing: 4px; font-weight: 800; }
+      .logo .a { display: block; font-size: clamp(34px, 9vw, 64px); color: #fff; text-shadow: 0 0 6px #3ee8ff, 0 0 18px #3ee8ff, 0 0 36px #3ee8ff88; }
+      .logo .b { display: block; font-size: clamp(44px, 12vw, 84px); color: #fff; text-shadow: 0 0 6px #ff3ec8, 0 0 20px #ff3ec8, 0 0 40px #ff3ec888; }
+      #tube { width: 100%; height: 34px; margin-top: 18px; border-radius: 17px; position: relative;
+              background: linear-gradient(180deg, #ffffff14, #ffffff05 45%, #00000030); border: 2px solid #8a7dff88;
+              box-shadow: 0 0 16px #8a7dff55, inset 0 0 12px #00000080; overflow: hidden; }
+      #tube canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+      #tube::after { content: ""; position: absolute; left: 10px; right: 10px; top: 4px; height: 6px; border-radius: 3px; background: #ffffff30; }
+      #pct { font-size: 28px; letter-spacing: 2px; color: #ffe27a; text-shadow: 0 0 10px #ffc94088; }
+      #msg { font-size: 13px; color: #b9b4ff; line-height: 1.6; }
       #msg.error { color: #ff7a9c; }
     </style>
   </head>
   <body>
     <canvas id="unity-canvas" tabindex="-1"></canvas>
     <div id="loader">
-      <h1>MARBLE RUSH</h1>
-      <div id="bar"><div id="fill"></div></div>
-      <div id="msg">載入中…（第一次開啟需下載約數十 MB，請使用 Wi-Fi）</div>
+      <canvas id="fx"></canvas>
+      <div id="panel">
+        <div class="logo"><span class="a">MARBLE</span><span class="b">RUSH</span></div>
+        <div id="tube"><canvas id="tubeFx"></canvas></div>
+        <div id="pct">0%</div>
+        <div id="msg">彈珠裝填中…第一次開啟需下載約 15 MB，建議使用 Wi-Fi</div>
+      </div>
     </div>
     <script src="Build/WebGL.loader.js"></script>
     <script>
       (function () {
         var canvas = document.querySelector("#unity-canvas");
         var loader = document.querySelector("#loader");
-        var fill   = document.querySelector("#fill");
         var msg    = document.querySelector("#msg");
+        var pct    = document.querySelector("#pct");
+        var progress = 0, shown = 0, running = true;
+
+        // ── 載入動畫：霓虹釘陣中落下的發光彈珠（背景）＋玻璃管逐漸裝滿彈珠（進度） ──
+        var fx = document.querySelector("#fx"), g = fx.getContext("2d");
+        var tube = document.querySelector("#tubeFx"), tg = tube.getContext("2d");
+        var COLORS = ["#3ee8ff", "#ff3ec8", "#ffd05a", "#b07cff"];
+        var dpr = Math.min(window.devicePixelRatio || 1, 2), W = 0, H = 0, pegs = [], balls = [];
+
+        function layout() {
+          W = window.innerWidth; H = window.innerHeight;
+          fx.width = W * dpr; fx.height = H * dpr; g.setTransform(dpr, 0, 0, dpr, 0, 0);
+          var tr = tube.getBoundingClientRect();
+          tube.width = tr.width * dpr; tube.height = tr.height * dpr; tg.setTransform(dpr, 0, 0, dpr, 0, 0);
+          pegs = [];
+          var sx = Math.max(54, W / 9), sy = sx * 0.85;
+          for (var r = 0; r * sy < H + sy; r++)
+            for (var c = -1; c * sx < W + sx; c++) pegs.push([c * sx + (r % 2 ? sx / 2 : 0), r * sy + sy * 0.5]);
+          balls = [];
+          for (var i = 0; i < 16; i++) balls.push(spawn(Math.random() * H));
+        }
+        function spawn(y) {
+          return { x: Math.random() * W, y: y, vx: (Math.random() - 0.5) * 60, vy: Math.random() * 60,
+                   r: 6 + Math.random() * 7, c: COLORS[(Math.random() * COLORS.length) | 0], t: [] };
+        }
+        function marble(ctx, x, y, r, c, a) {
+          ctx.globalAlpha = a;
+          var glow = ctx.createRadialGradient(x, y, 0, x, y, r * 3);
+          glow.addColorStop(0, c + "aa"); glow.addColorStop(1, c + "00");
+          ctx.fillStyle = glow; ctx.beginPath(); ctx.arc(x, y, r * 3, 0, 6.283); ctx.fill();
+          var body = ctx.createRadialGradient(x - r * 0.35, y - r * 0.4, r * 0.1, x, y, r);
+          body.addColorStop(0, "#ffffff"); body.addColorStop(0.35, c); body.addColorStop(1, "#140a2a");
+          ctx.fillStyle = body; ctx.beginPath(); ctx.arc(x, y, r, 0, 6.283); ctx.fill();
+          ctx.globalAlpha = 1;
+        }
+        var last = performance.now();
+        function frame(now) {
+          if (!running) return;
+          var dt = Math.min(0.05, (now - last) / 1000); last = now;
+          g.clearRect(0, 0, W, H);
+          g.fillStyle = "#8ab8ff22";
+          for (var p = 0; p < pegs.length; p++) { g.beginPath(); g.arc(pegs[p][0], pegs[p][1], 3, 0, 6.283); g.fill(); }
+          for (var i = 0; i < balls.length; i++) {
+            var b = balls[i];
+            b.vy += 480 * dt; b.x += b.vx * dt; b.y += b.vy * dt;
+            for (var k = 0; k < pegs.length; k++) {
+              var dx = b.x - pegs[k][0], dy = b.y - pegs[k][1], m = b.r + 3, d2 = dx * dx + dy * dy;
+              if (d2 < m * m && d2 > 0.01) {
+                var d = Math.sqrt(d2), nx = dx / d, ny = dy / d, vn = b.vx * nx + b.vy * ny;
+                b.x = pegs[k][0] + nx * m; b.y = pegs[k][1] + ny * m;
+                if (vn < 0) { b.vx -= 1.5 * vn * nx; b.vy -= 1.5 * vn * ny; }
+                b.vx += (Math.random() - 0.5) * 50;
+              }
+            }
+            b.t.push([b.x, b.y]); if (b.t.length > 9) b.t.shift();
+            for (var t = 0; t < b.t.length; t++) marble(g, b.t[t][0], b.t[t][1], b.r * (0.4 + t / 18), b.c, 0.05 + t * 0.02);
+            marble(g, b.x, b.y, b.r, b.c, 0.85);
+            if (b.y > H + 40) balls[i] = spawn(-20);
+          }
+
+          // 玻璃管：已載入的部分排滿彈珠，最前端一顆滾動中
+          shown += (progress - shown) * Math.min(1, dt * 6);
+          var tw = tube.width / dpr, th = tube.height / dpr, rr = th * 0.36, step = rr * 2.15;
+          var count = Math.floor((tw - rr) / step), filled = shown * count;
+          tg.clearRect(0, 0, tw, th);
+          for (var n = 0; n < count; n++) {
+            if (n + 1 > filled + 1) break;
+            var a = Math.min(1, filled - n + 1);
+            marble(tg, rr + 4 + n * step, th / 2, rr, COLORS[n % COLORS.length], Math.max(0.15, a));
+          }
+          pct.textContent = Math.round(shown * 100) + "%";
+          requestAnimationFrame(frame);
+        }
+        layout();
+        window.addEventListener("resize", layout);
+        requestAnimationFrame(frame);
 
         function showError(text) {
-          loader.style.display = "flex";
           msg.className = "error";
           msg.textContent = "啟動失敗：" + text;
         }
@@ -68,10 +155,15 @@
           productVersion: "1.0",
           // iPhone 原生 3 倍像素：限制為 2 倍，降低 GPU 負擔、維持幀率
           devicePixelRatio: Math.min(window.devicePixelRatio || 1, 2),
-        }, function (progress) {
-          fill.style.width = Math.round(progress * 100) + "%";
+        }, function (p) {
+          progress = Math.max(progress, p);
         }).then(function () {
-          loader.style.display = "none";
+          progress = 1;
+          // 管子裝滿後再淡出，並停止動畫迴圈釋放 CPU
+          setTimeout(function () {
+            loader.className = "done";
+            setTimeout(function () { running = false; loader.style.display = "none"; }, 500);
+          }, 350);
         }).catch(function (err) {
           showError(err && err.message ? err.message : String(err));
         });
